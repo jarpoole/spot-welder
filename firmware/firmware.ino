@@ -70,6 +70,7 @@ void PinB(){
 }
 
 void printNum(uint32_t value){
+  lc.clearDisplay(0);
   int c = 0; 
   while (value != 0){
     lc.setDigit(0, c, value % 10, false);
