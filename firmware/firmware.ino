@@ -13,33 +13,33 @@ static int pinB = 3; // Our second hardware interrupt pin is digital pin 3
 static int encoderButton = 4; // Encoder button pin
 volatile byte aFlag = 0; // let's us know when we're expecting a rising edge on pinA to signal that the encoder has arrived at a detent
 volatile byte bFlag = 0; // let's us know when we're expecting a rising edge on pinB to signal that the encoder has arrived at a detent (opposite direction to when aFlag is set)
-volatile uint32_t encoderPos = 0; //this variable stores our current value of encoder position. Change to int or uin16_t instead of byte if you want to record a larger range than 0-255
-volatile uint32_t oldEncPos = 0; //stores the last encoder position value so we can compare to the current reading and see if it has changed (so we know when to print to the serial monitor)
 volatile byte reading = 0; //somewhere to store the direct values we read from our interrupt pins before checking to see if we have moved a whole detent
 volatile bool lastButtonState = false; //Last value of the encoder button
 volatile long lastTickTime = 0; //Used to calculate encoder acceleration
 
 //Control data
-static int button1 = A0;
+static int button1 = A2;
 static int button2 = A1;
-static int button3 = A2;
-static int led1 = A3;
+static int button3 = A0;
+static int led1 = A5;
 static int led2 = A4;
-static int led3 = A5;
+static int led3 = A3;
 static long button1Time = 0;
 static long button2Time = 0;
 static long button3Time = 0;
 static int longPressTime = 2000;
 static int blinkTime = 200;
+volatile uint32_t incrementValue = 1;
 
-static int eepromPreset1Start = 0; //Each uint32_t occupies 4 bytes
-static int eepromPreset2Start = 5;
-static int eepromPreset3Start = 9;
+static int eepromPreset1Start = 5; //Each uint32_t occupies 4 bytes
+static int eepromPreset2Start = 9;
+static int eepromPreset3Start = 13;
 volatile uint32_t preset1 = 0;
 volatile uint32_t preset2 = 0;
 volatile uint32_t preset3 = 0;
 
 volatile uint32_t weldTime = 0;
+volatile bool refresh = false;
 
 
 void setup() {
@@ -50,7 +50,6 @@ void setup() {
   Serial.begin(9600); // start the serial monitor link
 
   pinMode(encoderButton, INPUT_PULLUP);
-
   pinMode(button1, INPUT_PULLUP);
   pinMode(button2, INPUT_PULLUP);
   pinMode(button3, INPUT_PULLUP);
@@ -58,90 +57,163 @@ void setup() {
   pinMode(led1, OUTPUT);
   pinMode(led2, OUTPUT);
   pinMode(led3, OUTPUT);
+
+  preset1 = recallPreset(eepromPreset1Start);
+  preset2 = recallPreset(eepromPreset2Start);
+  preset3 = recallPreset(eepromPreset3Start);
   
   // The MAX7219 is in power-saving mode on startup, we have to do a wakeup call
   lc.shutdown(0,false);
   // Set the brightness to a medium values
-  lc.setIntensity(0,8);
+  //lc.setIntensity(0,8);
+  lc.setIntensity(0,15);
   // Clear the display
   lc.clearDisplay(0);
 }
 void loop() {
 
+  if(!digitalRead(encoderButton)){
+    if(incrementValue > 1000000 || incrementValue == 0){
+      incrementValue = 1;
+    }else{
+      incrementValue = incrementValue * 10;
+    }
+    refresh = true;
+    delay(250);
+  }
+
   if(!digitalRead(button1) && button1Time == 0){
     button1Time = millis();
+    refresh = true;
   }
   if(!digitalRead(button2) && button2Time == 0){
     button2Time = millis();
+    refresh = true;
   }
   if(!digitalRead(button3) && button3Time == 0){
     button3Time = millis();
+    refresh = true;
   }
 
   if( digitalRead(button1) ){
     if( button1Time == 0){
       //Do nothing
     }else if(millis() - button1Time > longPressTime){ //save
+      button1Time = 0;
+      savePreset(eepromPreset1Start, weldTime);
+      preset1 = weldTime;
       for(int i = 0; i < 3; i++){
         digitalWrite(led1, HIGH);
         delay(blinkTime);
         digitalWrite(led1, LOW);
         delay(blinkTime);
       }
+      refresh = true;
     }else{  //recall
-        digitalWrite(led1, HIGH);
+      weldTime = preset1;
+      button1Time = 0;
+      digitalWrite(led1, HIGH);
+      digitalWrite(led2, LOW);
+      digitalWrite(led3, LOW);
+      refresh = true;
+    }
+    
+  }
+
+  if( digitalRead(button2) ){
+    if( button2Time == 0){
+      //Do nothing
+    }else if(millis() - button2Time > longPressTime){ //save
+      button2Time = 0;
+      savePreset(eepromPreset2Start, weldTime);
+      preset2 = weldTime;
+      for(int i = 0; i < 3; i++){
+        digitalWrite(led2, HIGH);
+        delay(blinkTime);
         digitalWrite(led2, LOW);
+        delay(blinkTime);
+      }
+      refresh = true;
+    }else{  //recall
+      weldTime = preset2;
+      button2Time = 0;
+      digitalWrite(led1, LOW);
+      digitalWrite(led2, HIGH);
+      digitalWrite(led3, LOW);
+      refresh = true;
+    }
+   
+  }
+
+  if( digitalRead(button3) ){
+    if( button3Time == 0){
+      //Do nothing
+    }else if(millis() - button3Time > longPressTime){ //save
+      button3Time = 0;
+      savePreset(eepromPreset3Start, weldTime);
+      preset3 = weldTime;
+      for(int i = 0; i < 3; i++){
+        digitalWrite(led3, HIGH);
+        delay(blinkTime);
         digitalWrite(led3, LOW);
+        delay(blinkTime);
+      }
+      refresh = true;
+    }else{  //recall
+       weldTime = preset3;
+       button3Time = 0;
+       digitalWrite(led1, LOW);
+       digitalWrite(led2, LOW);
+       digitalWrite(led3, HIGH);
+       refresh = true;
     }
   }
- /*
   //Device#, digit#, value, decimal
   //lc.setDigit(0,0,5,false)
 
-  if(oldEncPos != encoderPos) {
-    Serial.println(encoderPos);
-    oldEncPos = encoderPos;
+  if(refresh) {
+    Serial.println(weldTime);
+    updateDisplay(weldTime);
+    refresh = false;
   }
-  printNum(encoderPos);
-  delay(delaytime);
+  
+  
+  //delay(delaytime);
 
-  */
 }
 
 void PinA(){
   cli(); //stop interrupts happening before we read pin values
   reading = PIND & 0xC; // read all eight pin values then strip away all but pinA and pinB's values
   if(reading == B00001100 && aFlag) { //check that we have both pins at detent (HIGH) and that we are expecting detent on this pin's rising edge
-    encoderPos --; //decrement the encoder's position count
+    weldTime += incrementValue; //decrement the encoder's position count
     bFlag = 0; //reset flags for the next turn
     aFlag = 0; //reset flags for the next turn
+    digitalWrite(led1, LOW);
+    digitalWrite(led2, LOW);
+    digitalWrite(led3, LOW);
   }
   else if (reading == B00000100) bFlag = 1; //signal that we're expecting pinB to signal the transition to detent from free rotation
+  refresh = true;
   sei(); //restart interrupts
 }
 void PinB(){
   cli(); //stop interrupts happening before we read pin values
   reading = PIND & 0xC; //read all eight pin values then strip away all but pinA and pinB's values
   if (reading == B00001100 && bFlag) { //check that we have both pins at detent (HIGH) and that we are expecting detent on this pin's rising edge
-    long tickTime = millis() - lastTickTime;
-    if(tickTime < 10){
-      encoderPos += 1000;
-    }else if(tickTime < 100){
-      encoderPos += 100;
-    }else if(tickTime < 500){
-      encoderPos += 10;
-    }else{
-      encoderPos ++; //increment the encoder's position count
-    } 
-    lastTickTime = millis();
+    weldTime -= incrementValue; //increment the encoder's position count
     bFlag = 0; //reset flags for the next turn
     aFlag = 0; //reset flags for the next turn
+    digitalWrite(led1, LOW);
+    digitalWrite(led2, LOW);
+    digitalWrite(led3, LOW);
   }
   else if (reading == B00001000) aFlag = 1; //signal that we're expecting pinA to signal the transition to detent from free rotation
+  refresh = true;
   sei(); //restart interrupts
 }
 
-void printNum(uint32_t value){
+void updateDisplay(uint32_t value){
   lc.clearDisplay(0);
   if(value == 0){
     lc.setDigit(0, 0, 0, false);
