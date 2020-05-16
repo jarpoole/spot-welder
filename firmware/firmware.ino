@@ -1,10 +1,10 @@
-//We always have to include the library
+
 #include "LedControl.h"
 #include <EEPROM.h>
 
 // DataIn=11, CLK=13, LOAD=12, #MAX7219 devices
 LedControl lc=LedControl(11,13,12,1);
-// We always wait a bit between updates of the display
+//Wait a bit between updates of the display
 unsigned long delaytime=250;
 
 //Encoder Stuff
@@ -28,8 +28,16 @@ static long button1Time = 0;
 static long button2Time = 0;
 static long button3Time = 0;
 static int longPressTime = 2000;
+static int triggerPin = 7;
+static int ssrPin = 8;
+static int buzzerPin = 9;
+
 static int blinkTime = 200;
+volatile long blinkTimer = 0;
+volatile bool blinking = false;
+
 volatile uint32_t incrementValue = 1;
+volatile uint32_t incrementPos = 0;
 
 static int eepromPreset1Start = 5; //Each uint32_t occupies 4 bytes
 static int eepromPreset2Start = 9;
@@ -39,6 +47,9 @@ volatile uint32_t preset2 = 0;
 volatile uint32_t preset3 = 0;
 
 volatile uint32_t weldTime = 0;
+volatile long lastWeldTime = 0; //Time in millis that the last weld occured at
+static int weldTimeout = 3000;  //Minimum time before next weld
+
 volatile bool refresh = false;
 
 
@@ -53,30 +64,68 @@ void setup() {
   pinMode(button1, INPUT_PULLUP);
   pinMode(button2, INPUT_PULLUP);
   pinMode(button3, INPUT_PULLUP);
+  pinMode(triggerPin, INPUT_PULLUP);
 
   pinMode(led1, OUTPUT);
   pinMode(led2, OUTPUT);
   pinMode(led3, OUTPUT);
+  pinMode(buzzerPin, OUTPUT);
+  pinMode(ssrPin, OUTPUT);
 
   preset1 = recallPreset(eepromPreset1Start);
   preset2 = recallPreset(eepromPreset2Start);
   preset3 = recallPreset(eepromPreset3Start);
+
+  Serial.println(preset1);
+  Serial.println(preset2);
+  Serial.println(preset3);
   
   // The MAX7219 is in power-saving mode on startup, we have to do a wakeup call
   lc.shutdown(0,false);
-  // Set the brightness to a medium values
-  //lc.setIntensity(0,8);
+  // Set the brightness (0-15) to full
   lc.setIntensity(0,15);
   // Clear the display
   lc.clearDisplay(0);
 }
+
 void loop() {
+
+  if( !digitalRead(triggerPin) && millis() > (lastWeldTime + weldTimeout) ){
+    //Timer setup
+    int milliseconds = weldTime / 1000;
+    int microseconds = weldTime % 1000;
+
+    Serial.println(weldTime);
+    
+    digitalWrite(buzzerPin, HIGH);
+    digitalWrite(ssrPin, HIGH);
+
+    if(milliseconds){
+      delay(milliseconds);
+    }
+    if(microseconds){
+      delayMicroseconds(microseconds);
+    }
+    
+    digitalWrite(ssrPin, LOW);
+    digitalWrite(buzzerPin, LOW);
+    lastWeldTime = millis();
+  }
+
+  //Timer for blinking decimal point selection indicator
+  if(millis() > blinkTimer){
+    blinkTimer = millis() + blinkTime;
+    blinking = !blinking;
+    refresh = true;
+  }
 
   if(!digitalRead(encoderButton)){
     if(incrementValue > 1000000 || incrementValue == 0){
       incrementValue = 1;
+      incrementPos = 0;
     }else{
       incrementValue = incrementValue * 10;
+      incrementPos++;
     }
     refresh = true;
     delay(250);
@@ -117,7 +166,6 @@ void loop() {
       digitalWrite(led3, LOW);
       refresh = true;
     }
-    
   }
 
   if( digitalRead(button2) ){
@@ -142,7 +190,6 @@ void loop() {
       digitalWrite(led3, LOW);
       refresh = true;
     }
-   
   }
 
   if( digitalRead(button3) ){
@@ -168,12 +215,10 @@ void loop() {
        refresh = true;
     }
   }
-  //Device#, digit#, value, decimal
-  //lc.setDigit(0,0,5,false)
 
   if(refresh) {
-    Serial.println(weldTime);
-    updateDisplay(weldTime);
+    //Serial.println(weldTime);
+    updateDisplay(weldTime, blinking, incrementPos);
     refresh = false;
   }
   
@@ -186,7 +231,7 @@ void PinA(){
   cli(); //stop interrupts happening before we read pin values
   reading = PIND & 0xC; // read all eight pin values then strip away all but pinA and pinB's values
   if(reading == B00001100 && aFlag) { //check that we have both pins at detent (HIGH) and that we are expecting detent on this pin's rising edge
-    weldTime += incrementValue; //decrement the encoder's position count
+    weldTime += incrementValue; //increment the encoder's position count
     bFlag = 0; //reset flags for the next turn
     aFlag = 0; //reset flags for the next turn
     digitalWrite(led1, LOW);
@@ -201,7 +246,13 @@ void PinB(){
   cli(); //stop interrupts happening before we read pin values
   reading = PIND & 0xC; //read all eight pin values then strip away all but pinA and pinB's values
   if (reading == B00001100 && bFlag) { //check that we have both pins at detent (HIGH) and that we are expecting detent on this pin's rising edge
-    weldTime -= incrementValue; //increment the encoder's position count
+
+    if(weldTime - incrementValue < weldTime){ //Detect integer underflow
+      weldTime = weldTime - incrementValue;  //decrement the encoder's position count
+    }else{
+      weldTime = 0;
+    }
+    
     bFlag = 0; //reset flags for the next turn
     aFlag = 0; //reset flags for the next turn
     digitalWrite(led1, LOW);
@@ -213,7 +264,9 @@ void PinB(){
   sei(); //restart interrupts
 }
 
-void updateDisplay(uint32_t value){
+//Device#, digit#, value, decimal
+//lc.setDigit(0,0,5,false)
+void updateDisplay(uint32_t value, bool blinking, int blinkingPos){
   lc.clearDisplay(0);
   if(value == 0){
     lc.setDigit(0, 0, 0, false);
@@ -225,6 +278,9 @@ void updateDisplay(uint32_t value){
       c++;
     }
   }
+
+  //Device#, row#, col#, decimal
+  lc.setLed(0, blinkingPos, 0, blinking);
 }
 
 void savePreset(int presetStartAddr, uint32_t value){
@@ -237,6 +293,10 @@ void savePreset(int presetStartAddr, uint32_t value){
   EEPROM.write(presetStartAddr + 1, upMid);
   EEPROM.write(presetStartAddr + 2, lowMid);
   EEPROM.write(presetStartAddr + 3, lower);
+  
+  Serial.print("Saved value: ");
+  Serial.print(value);
+  Serial.print("\n");
 }
 
 uint32_t recallPreset(int presetStartAddr){
@@ -245,6 +305,11 @@ uint32_t recallPreset(int presetStartAddr){
   byte lowMid = EEPROM.read(presetStartAddr + 2);
   byte lower = EEPROM.read(presetStartAddr + 3);
 
-  uint32_t value = (upper << 24) | (upMid << 16) | (lowMid << 8) | lower;
+  uint32_t value = ((uint32_t) upper << 24) | ((uint32_t) upMid << 16) | ((uint32_t) lowMid << 8) | ((uint32_t) lower);
+
+  Serial.print("Read value: ");
+  Serial.print(value);
+  Serial.print("\n");
+  
   return value;
 }
